@@ -123,7 +123,7 @@ def producer():
                 logger.info("Trying to search using the URL")
                 selenium.go_to(url + f"/search?q={search_term}")
             finally:
-                selenium.wait_until_page_contains_element("class:promo-content", timeout=15)
+                selenium.wait_until_page_contains_element("class:page-content", timeout=15)
             
             if category:
                 page = selenium.find_element("class:page-content")
