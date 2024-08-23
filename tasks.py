@@ -92,12 +92,13 @@ def producer():
     
     def run_task():
         for item in workitems.inputs:
-            logger.info(f"Processing item: {item}")
+            logger.info(f"Processing item: {item.payload}")
             
             url = item.payload.get("url")
             search_term = item.payload.get("search_term")
             num_months = item.payload.get("num_months")
             category = item.payload.get("category")
+
             
             target_date = _get_target_date(num_months)
             logger.info(f"Target date: {target_date}")
