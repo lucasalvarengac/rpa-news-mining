@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 import requests
-from robocorp import browser, workitems
+from robocorp import browser, workitems, vault
 from robocorp.tasks import task
 from RPA.Browser.Selenium import Selenium, ElementNotFound
 from RPA.Excel.Files import Files as Excel
@@ -10,6 +10,15 @@ import requests
 import re
 import logging
 from dateutil.relativedelta import relativedelta
+from boto3 import client
+
+
+aws = vault.get_secret("AWS")
+os.environ["AWS_ACCESS_KEY_ID"] = aws["AWS_ACCESS_KEY"]
+os.environ["AWS_SECRET_ACCESS_KEY"] = aws["AWS_SECRET_ACCESS"]
+os.environ["AWS_DEFAULT_REGION"] = aws["AWS_REGION"]
+
+s3 = client("s3")
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +41,15 @@ def producer():
 
     def download_img(url, filename):
         response = requests.get(url)
-        with open(filename, "wb") as file:
-            file.write(response.content)
-        return filename
+        bucket = "rpa-challenge-pictures"
+        s3.put_object(Bucket=bucket, Key=filename, Body=response.content)
+        logger.info(f"Image {filename} uploaded to s3")
+        #get public url from s3
+        url = s3.generate_presigned_url("get_object",
+                                        Params={"Bucket": bucket,
+                                                "Key": filename},
+                                        ExpiresIn=360000)
+        return url
 
     def _get_target_date(num_months):
         target_date = datetime.now().replace(
@@ -78,17 +93,17 @@ def producer():
             image = selenium.find_element("tag:img", media).get_attribute("src")
             filename = title.replace(" ", "_")
             filename = re.sub(r"[^a-zA-Z0-9_]", "", filename).lower() + ".jpg"
-            output_filename = OUTPUT_DIR / filename
+            output_filename = filename
         except ElementNotFound:
             image = ""
             output_filename = ""
-        download_img(image, filename=output_filename)
+        img_url = download_img(image, filename=output_filename)
         news_data = {
             "title": title,
             "url": url,
             "description": description,
             "date": created_at,
-            "image": str(output_filename),
+            "image": img_url,
             "amount_of_money": amount_of_money,
             "count_search_phrase": count_search_phrase,
         }
