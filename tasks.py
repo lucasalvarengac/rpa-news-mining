@@ -70,7 +70,6 @@ def producer():
         content = selenium.find_element("class:promo-content", news)
         title_container = selenium.find_element("class:promo-title-container", content)
         title = selenium.find_element("tag:h3", title_container).text
-        url = selenium.find_element("tag:a", title_container).get_attribute("href")
         try:
             description = selenium.find_element("class:promo-description", content).text
         except ElementNotFound:
@@ -91,6 +90,7 @@ def producer():
         try:
             media = selenium.find_element("class:promo-media", news)
             image = selenium.find_element("tag:img", media).get_attribute("src")
+            url = selenium.find_element("tag:a", media).get_attribute("href")
             filename = title.replace(" ", "_")
             filename = re.sub(r"[^a-zA-Z0-9_]", "", filename).lower() + ".jpg"
             output_filename = filename
@@ -194,8 +194,8 @@ def producer():
                     "class:search-results-module-results-menu", page
                 )
                 news_list = selenium.find_elements("tag:ps-promo", results)
+                page_news_data = []
                 for news in news_list:
-                    print(news.text)
                     news_data = parse_news(
                         news=news, search_term=search_term, selenium=selenium
                     )
@@ -207,11 +207,12 @@ def producer():
                         news_data["date"] = news_data["date"].strftime(
                             "%Y-%m-%d %H:%M:%S"
                         )
-                        workitems.outputs.create(news_data)
                         news_title = news_data["title"]
-                        logger.info(f"News {news_title} added to output")
+                        page_news_data.append(news_data)
+                        logger.info(f"News {news_title} added to list")
                     else:
                         logger.warning("News date is older than target date")
+                workitems.outputs.create(page_news_data)
 
                 page_num = selenium.find_element(
                     "class:search-results-module-page-counts", page
@@ -244,8 +245,9 @@ def consumer():
     excel.create_workbook(file_path)
 
     for item in workitems.inputs:
-        news_data = item.payload
-        excel.append_rows_to_worksheet(news_data, header=True)
+        page_news_data = item.payload
+        for news_data in page_news_data:
+            excel.append_rows_to_worksheet(news_data, header=True)
 
         item.done()
     excel.save_workbook(file_path)
