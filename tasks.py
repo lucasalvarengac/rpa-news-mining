@@ -1,10 +1,14 @@
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import NoSuchElementException, ElementClickInterceptedException
+from robocorp import workitems, vault
+from robocorp.tasks import task
+from RPA.Excel.Files import Files as Excel
+from RPA.core.webdriver import start
+
 import os
 from pathlib import Path
 import requests
-from robocorp import browser, workitems, vault
-from robocorp.tasks import task
-from RPA.Browser.Selenium import Selenium, ElementNotFound
-from RPA.Excel.Files import Files as Excel
 from datetime import datetime
 import requests
 import re
@@ -13,13 +17,13 @@ from dateutil.relativedelta import relativedelta
 from boto3 import client
 
 
+
 aws = vault.get_secret("AWS")
 os.environ["AWS_ACCESS_KEY_ID"] = aws["AWS_ACCESS_KEY"]
 os.environ["AWS_SECRET_ACCESS_KEY"] = aws["AWS_SECRET_ACCESS"]
 os.environ["AWS_DEFAULT_REGION"] = aws["AWS_REGION"]
 
 
-logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = Path(os.getenv("ROBOT_ARTIFACTS", "output"))
 
@@ -32,6 +36,8 @@ class Crawler:
         self.category = category
         self.target_date = self._get_target_date()
         self.s3 = client("s3")
+        self.logger = logging.getLogger(__name__)
+        self.driver = None
 
     def create_workbook(self, file_path):
         self.excel = Excel()
@@ -50,41 +56,45 @@ class Crawler:
             target_date = (datetime.now() - relativedelta(months=2)).replace(
                 day=1, hour=0, minute=0, second=0, microsecond=0
             )
-        logger.info(f"Target date: {target_date}")
+        
         return target_date
 
-    def init_browser(self):
-        browser.configure(
-            browser_engine="chromium", screenshot="only-on-failure", headless=True
-        )
-        self.selenium = Selenium(timeout=60, implicit_wait=2)
-        self.selenium.open_available_browser(self.url)
+    def set_chrome_options(self):
+        options = webdriver.ChromeOptions()
+        # options.add_argument('--headless')
+        options.add_argument('--no-sandbox')
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-gpu")
+        options.add_argument('--disable-web-security')
+        options.add_argument("--start-maximized")
+        options.add_argument('--remote-debugging-port=9222')
+        options.add_experimental_option("excludeSwitches", ["enable-logging"])
+        return options
+
+    def set_webdriver(self, browser="Chrome"):
+        options = self.set_chrome_options()
+        self.driver = start(browser, options=options)
+        self.driver.implicitly_wait(10)
 
     def download_img(self, url, filename):
         response = requests.get(url)
         bucket = "rpa-challenge-pictures"
         self.s3.put_object(Bucket=bucket, Key=filename, Body=response.content)
-        logger.info(f"Image {filename} uploaded to s3")
+        self.logger.info(f"Image {filename} uploaded to s3")
         url = self.s3.generate_presigned_url(
             "get_object", Params={"Bucket": bucket, "Key": filename}, ExpiresIn=360000
         )
         return url
 
     def parse_news_article(self, news, search_term):
-        content = self.selenium.find_element("class:promo-content", news)
-        title_container = self.selenium.find_element(
-            "class:promo-title-container", content
-        )
-        title = self.selenium.find_element("tag:h3", title_container).text
+        content = self.driver.find_element(by=By.CLASS_NAME, value="promo-content")
+        title_container =  content.find_element(By.CLASS_NAME, "promo-title-container")
+        title = title_container.find_element(By.TAG_NAME, "h3").text
         try:
-            description = self.selenium.find_element(
-                "class:promo-description", content
-            ).text
-        except ElementNotFound:
+            description = content.find_element(By.CLASS_NAME, "promo-description").text
+        except NoSuchElementException:
             description = ""
-        created_at = self.selenium.find_element(
-            "class:promo-timestamp", content
-        ).get_attribute("data-timestamp")
+        created_at = content.find_element(By.CLASS_NAME, "promo-timestamp").get_attribute("data-timestamp")
         created_at = datetime.fromtimestamp(int(created_at) / 1000)
         re_exp1 = r"\$?[0-9,.]+"
         re_exp2 = r"\d+[dollars|usd]"
@@ -96,13 +106,13 @@ class Crawler:
             re.findall(search_term, title + description, re.IGNORECASE)
         )
         try:
-            media = self.selenium.find_element("class:promo-media", news)
-            image = self.selenium.find_element("tag:img", media).get_attribute("src")
-            url = self.selenium.find_element("tag:a", media).get_attribute("href")
+            media = news.find_element(By.CLASS_NAME, "promo-media")
+            image = media.find_element(By.TAG_NAME, "img").get_attribute("src")
+            url = media.find_element(By.TAG_NAME, "a").get_attribute("href")
             filename = title.replace(" ", "_")
             filename = re.sub(r"[^a-zA-Z0-9_]", "", filename).lower() + ".jpg"
             output_filename = filename
-        except ElementNotFound:
+        except NoSuchElementException:
             image = ""
             output_filename = ""
         img_url = self.download_img(image, filename=output_filename)
@@ -119,107 +129,98 @@ class Crawler:
 
     def search_by_term(self):
         try:
-            self.selenium.wait_until_page_contains_element(
-                "class:page-body", timeout=15
+            page = self.driver.find_element(by=By.CLASS_NAME, value="page-body")
+            search_icon = page.find_element(
+                by=By.XPATH, value="//button[@data-element='search-button']"
             )
-            page = self.selenium.find_element("class:page-body")
-            search_button = self.selenium.find_element(
-                "xpath://button[@data-element='search-button']", page
+            search_icon.click()
+            search_bar = self.driver.find_element(
+                by=By.XPATH, value="//div[@data-element='search-overlay']"
             )
-            self.selenium.click_element(search_button)
-            search_bar = self.selenium.wait_until_page_contains_element(
-                "xpath://div[@data-element='search-overlay']", timeout=15
+            search_input = search_bar.find_element(
+                by=By.XPATH, value="//input[@name='q']"
             )
-            search_input = self.selenium.find_element(
-                "xpath://input[@name='q']", search_bar
+            search_input.send_keys(self.search_term)
+            search_button = search_bar.find_element(
+                by=By.XPATH, value="//button[@type='submit']"
             )
-            self.selenium.input_text(search_input, text=self.search_term)
-            search_button = self.selenium.find_element(
-                "xpath://button[@type='submit']", search_bar
-            )
-            self.selenium.click_element(search_button)
+            search_button.click()
 
-        except ElementNotFound:
-            logger.warning("Search bar not found")
-            logger.info("Trying to search using the URL")
-            self.selenium.go_to(self.url + f"/search?q={self.search_term}")
-        finally:
-            self.selenium.wait_until_page_contains_element(
-                "class:page-content", timeout=15
-            )
+        except NoSuchElementException:
+            self.logger.warning("Search bar not found")
+            self.logger.info("Trying to search using the URL")
+            self.driver.get(self.url + f"/search?q={self.search_term}")
 
     def set_category(self):
-        page = self.selenium.find_element("class:page-content")
-        logger.info(f"Selecting category {self.category}")
-        category_toggler = self.selenium.find_element("xpath://ps-toggler", page)
-        see_all = self.selenium.find_element(
-            "xpath://span[contains(.,'See All')]", category_toggler
+        page = self.driver.find_element(by=By.CLASS_NAME, value="page-content")
+        self.logger.info(f"Selecting category {self.category}")
+        category_toggler = page.find_element(by=By.TAG_NAME, value="ps-toggler")
+        see_all = category_toggler.find_element(
+            by=By.XPATH, value="//span[contains(.,'See All')]"
         )
-        self.selenium.click_element(see_all)
+        see_all.click()
         try:
-            category_element = self.selenium.find_element(
-                f"xpath=//span[contains(.,'{self.category}')]", category_toggler
+            category_element = category_toggler.find_element(
+                by=By.XPATH, value=f"//span[contains(.,'{self.category}')]"
             )
-            self.selenium.click_element(category_element)
-            self.selenium.wait_until_element_is_not_visible(
-                "class:loading-icon", timeout=15
-            )
-        except ElementNotFound:
-            logger.warning(f"Category {self.category} not found")
+            category_element.click()
+
+        except NoSuchElementException:
+            self.logger.warning(f"Category {self.category} not found")
         except Exception as e:
-            logger.error(f"Error selecting category {self.category}: {e}")
-            logger.info("Continuing without selecting category")
+            self.logger.error(f"Error selecting category {self.category}: {e}")
+            self.logger.info("Continuing without selecting category")
 
     def sort_by(self, value="1"):
         # I had to force the sorting by newest because there was a problem that I could not solve
         # a loading div appears but all the waits strategies I tried did not work
         # because this all the elements were already there
         # really dont know how to solve it
-        logger.info("Sorting by newest")
-        updated_url = self.selenium.get_location()
+        self.logger.info("Sorting by newest")
+        updated_url = self.driver.current_url
         updated_url = re.sub(r"&s=\d", f"&s={value}", updated_url)
-        self.selenium.go_to(updated_url)
+        self.driver.get(updated_url)
 
     def click_next_button(self, page):
-        next_button = self.selenium.find_element(
-            "class:search-results-module-next-page", page
+        next_button = page.find_element(
+            by=By.CLASS_NAME, value="search-results-module-next-page"
         )
+
         try:
-            self.selenium.click_element(next_button)
-        except Exception as e:
-            if self.selenium.is_element_enabled(
-                "class:search-results-module-next-page"
-            ):
-                logger.error(f"next button not available: {e}")
-                logger.info("ending scraping")
+            next_button.click()
+        except ElementClickInterceptedException:
+            self.logger.error(f"next button not available")
+            self.logger.info("ending scraping")
             return False
         return True
 
 
 @task
 def run_crawler():
+
     for item in workitems.inputs:
-        logger.info(f"Processing item: {item.payload}")
         url = item.payload.get("url")
         search_term = item.payload.get("search_term")
         num_months = item.payload.get("num_months")
         category = item.payload.get("category")
         crawler = Crawler(url, search_term, num_months, category)
-        crawler.init_browser()
+        crawler.logger.info(f"Processing item: {item.payload}")
+        crawler.set_webdriver()
+        crawler.driver.get(url)
         crawler.search_by_term()
         if category:
             crawler.set_category()
         crawler.sort_by("1")
-        page = crawler.selenium.find_element("class:page-content")
+        page = crawler.driver.find_element(by=By.CLASS_NAME, value="page-content")
         current_date = datetime.now()
         file_path = f"news.xlsx"
         crawler.create_workbook(file_path)
-        logger.info("Starting to scrape news")
+        crawler.logger.info("Starting to scrape news")
         while crawler.target_date <= current_date:
-            results = crawler.selenium.find_element(
-                "class:search-results-module-results-menu", page
+            results = crawler.driver.find_element(
+                by = By.CLASS_NAME, value = "search-results-module-results-menu"
             )
-            news_list = crawler.selenium.find_elements("tag:ps-promo", results)
+            news_list = results.find_elements(by=By.TAG_NAME, value="ps-promo")
             page_news_data = []
             for news in news_list:
                 news_data = crawler.parse_news_article(news, search_term)
@@ -229,13 +230,12 @@ def run_crawler():
                     news_data["date"] = news_data["date"].strftime("%Y-%m-%d %H:%M:%S")
                     news_title = news_data["title"]
                     page_news_data.append(news_data)
-                    logger.info(f"News {news_title} added to list")
+                    crawler.logger.info(f"News {news_title} added to list")
                 else:
-                    logger.warning("News date is older than target date")
+                    crawler.logger.warning("News date is older than target date")
             crawler.excel.append_rows_to_worksheet(news_data, header=True)
             continue_loop = crawler.click_next_button(page)
             if not continue_loop:
                 break
-            page = crawler.selenium.find_element("class:page-content")
-        crawler.selenium.close_browser()
+            page = crawler.driver.find_element(by = By.CLASS_NAME, value = "page-content")
         item.done()
