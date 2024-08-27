@@ -4,7 +4,7 @@ from selenium.common.exceptions import NoSuchElementException, ElementClickInter
 from robocorp import workitems, vault
 from robocorp.tasks import task
 from RPA.Excel.Files import Files as Excel
-from RPA.core.webdriver import start
+from RPA.core.webdriver import start, download
 
 import os
 from pathlib import Path
@@ -61,7 +61,7 @@ class Crawler:
 
     def set_chrome_options(self):
         options = webdriver.ChromeOptions()
-        # options.add_argument('--headless')
+        options.add_argument('--headless')
         options.add_argument('--no-sandbox')
         options.add_argument("--disable-extensions")
         options.add_argument("--disable-gpu")
@@ -73,7 +73,9 @@ class Crawler:
 
     def set_webdriver(self, browser="Chrome"):
         options = self.set_chrome_options()
-        self.driver = start(browser, options=options)
+        executable_driver_path = download(browser)
+        self.logger.warning("Using downloaded driver: %s" % executable_driver_path)
+        self.driver = start("Chrome", options=options)
         self.driver.implicitly_wait(10)
 
     def download_img(self, url, filename):
