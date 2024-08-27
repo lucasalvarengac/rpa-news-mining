@@ -4,7 +4,6 @@ from selenium.common.exceptions import NoSuchElementException, ElementClickInter
 from robocorp import workitems, vault
 from robocorp.tasks import task
 from RPA.Excel.Files import Files as Excel
-from RPA.core.webdriver import start, download
 
 import os
 from pathlib import Path
@@ -39,10 +38,10 @@ class Crawler:
         self.logger = logging.getLogger(__name__)
         self.driver = None
 
-    def create_workbook(self, file_path):
+    def create_workbook(self, file_name):
         self.excel = Excel()
-        self.excel_path = OUTPUT_DIR / file_path
-        self.excel.create_workbook(self.excel_path)
+        excel_path = OUTPUT_DIR / file_name
+        self.excel.create_workbook(excel_path)
 
     def _get_target_date(self):
         target_date = datetime.now().replace(
@@ -85,30 +84,29 @@ class Crawler:
         url = self.s3.generate_presigned_url(
             "get_object", Params={"Bucket": bucket, "Key": filename}, ExpiresIn=360000
         )
-        return url
+        return url.split("?")[0]
 
-    def parse_news_article(self, news, search_term):
-        content = self.driver.find_element(by=By.CLASS_NAME, value="promo-content")
-        title_container =  content.find_element(By.CLASS_NAME, "promo-title-container")
+    def parse_news_article(self, news):
+        title_container =  news.find_element(By.CLASS_NAME, "promo-title-container")
         title = title_container.find_element(By.TAG_NAME, "h3").text
         try:
-            description = content.find_element(By.CLASS_NAME, "promo-description").text
+            description = news.find_element(By.CLASS_NAME, "promo-description").text
         except NoSuchElementException:
             description = ""
-        created_at = content.find_element(By.CLASS_NAME, "promo-timestamp").get_attribute("data-timestamp")
+        created_at = news.find_element(By.CLASS_NAME, "promo-timestamp").get_attribute("data-timestamp")
         created_at = datetime.fromtimestamp(int(created_at) / 1000)
-        re_exp1 = r"\$?[0-9,.]+"
+        re_exp1 = r"\$[0-9,.]+"
         re_exp2 = r"\d+[dollars|usd]"
         amount_of_money = re.findall(
             re_exp1, title + description, re.IGNORECASE
         ) or re.findall(re_exp2, title + description, re.IGNORECASE)
         amount_of_money = True if len(amount_of_money) > 0 else False
         count_search_phrase = len(
-            re.findall(search_term, title + description, re.IGNORECASE)
+            re.findall(self.search_term, title + description, re.IGNORECASE)
         )
         try:
             media = news.find_element(By.CLASS_NAME, "promo-media")
-            image = media.find_element(By.TAG_NAME, "img").get_attribute("src")
+            image = news.find_element(By.TAG_NAME, "img").get_attribute("src")
             url = media.find_element(By.TAG_NAME, "a").get_attribute("href")
             filename = title.replace(" ", "_")
             filename = re.sub(r"[^a-zA-Z0-9_]", "", filename).lower() + ".jpg"
@@ -219,29 +217,30 @@ def run_crawler():
         crawler.sort_by("1")
         page = crawler.driver.find_element(by=By.CLASS_NAME, value="page-content")
         current_date = datetime.now()
-        file_path = f"news.xlsx"
-        crawler.create_workbook(file_path)
+        file_name = "news.xlsx"
+        crawler.create_workbook(file_name)
         crawler.logger.info("Starting to scrape news")
         while crawler.target_date <= current_date:
             results = crawler.driver.find_element(
                 by = By.CLASS_NAME, value = "search-results-module-results-menu"
             )
             news_list = results.find_elements(by=By.TAG_NAME, value="ps-promo")
-            page_news_data = []
             for news in news_list:
-                news_data = crawler.parse_news_article(news, search_term)
+                news_data = crawler.parse_news_article(news)
                 if news_data["date"] <= current_date:
                     current_date = news_data["date"]
                 if news_data["date"] >= crawler.target_date:
                     news_data["date"] = news_data["date"].strftime("%Y-%m-%d %H:%M:%S")
                     news_title = news_data["title"]
-                    page_news_data.append(news_data)
+                    crawler.excel.append_rows_to_worksheet(news_data, header=True)
                     crawler.logger.info(f"News {news_title} added to list")
                 else:
                     crawler.logger.warning("News date is older than target date")
-            crawler.excel.append_rows_to_worksheet(news_data, header=True)
             continue_loop = crawler.click_next_button(page)
             if not continue_loop:
                 break
             page = crawler.driver.find_element(by = By.CLASS_NAME, value = "page-content")
+        crawler.logger.info("Scraping finished")
+        crawler.excel.save_workbook()
+        crawler.driver.quit()
         item.done()
