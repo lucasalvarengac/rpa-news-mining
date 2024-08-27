@@ -66,13 +66,12 @@ class Crawler:
         options.add_argument("--disable-gpu")
         options.add_argument('--disable-web-security')
         options.add_argument("--start-maximized")
-        options.add_argument('--remote-debugging-port=9222')
         options.add_experimental_option("excludeSwitches", ["enable-logging"])
         return options
 
-    def set_webdriver(self, browser="Chrome"):
+    def set_webdriver(self):
         options = self.set_chrome_options()
-        self.driver = start(browser, options=options)
+        self.driver = webdriver.Chrome(options=options)
         self.driver.implicitly_wait(10)
 
     def download_img(self, url, filename):
