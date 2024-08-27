@@ -67,6 +67,7 @@ class Crawler:
         options.add_argument("--disable-gpu")
         options.add_argument('--disable-web-security')
         options.add_argument("--start-maximized")
+        options.add_argument("--window-size=1920,1080")
         options.add_argument("--disable-dev-shm-usage")
         options.add_experimental_option("excludeSwitches", ["enable-logging"])
         return options
@@ -155,10 +156,15 @@ class Crawler:
         page = self.driver.find_element(by=By.CLASS_NAME, value="page-content")
         self.logger.info(f"Selecting category {self.category}")
         category_toggler = page.find_element(by=By.TAG_NAME, value="ps-toggler")
-        see_all = category_toggler.find_element(
-            by=By.XPATH, value="//span[contains(.,'See All')]"
+        see_all = self.driver.find_elements(
+            by=By.XPATH, value="//button[@class='button see-all-button']"
         )
-        see_all.click()
+        for element in see_all:
+            try:
+                element.click()
+            except Exception as e:
+                self.logger.error(f"Element is not clickable, got the error {e}")
+                self.logger.info("Continuing without clicking")
         try:
             category_element = category_toggler.find_element(
                 by=By.XPATH, value=f"//span[contains(.,'{self.category}')]"
