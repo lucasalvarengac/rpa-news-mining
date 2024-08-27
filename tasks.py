@@ -72,9 +72,7 @@ class Crawler:
 
     def set_webdriver(self, browser="Chrome"):
         options = self.set_chrome_options()
-        executable_driver_path = download(browser)
-        self.logger.warning("Using downloaded driver: %s" % executable_driver_path)
-        self.driver = start("Chrome", options=options)
+        self.driver = start(browser, options=options)
         self.driver.implicitly_wait(10)
 
     def download_img(self, url, filename):
